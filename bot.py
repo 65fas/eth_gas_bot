@@ -3,13 +3,23 @@ import requests
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+from flask import Flask  # We need to add this dependency
+import threading
 
 # Load environment variables from the .env file
 load_dotenv()
 
 # Fetch all our secrets from the environment
 ETHERSCAN_API_KEY = os.getenv('ETHERSCAN_API_KEY')
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN') # Your new Telegram token
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+
+# --- Create a minimal Flask app for health checks ---
+web_app = Flask(__name__)
+
+@web_app.route('/')
+def home():
+    """Simple health check endpoint. Render pings this to know the service is alive."""
+    return "✅ Ethereum Gas Price Bot is running!", 200
 
 # --- Reuse the same function from the Twitter bot ---
 def get_average_gas_price():
@@ -66,13 +76,27 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def gas_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /gas command."""
-    # This function can take a moment, so send a "typing" action to let the user know it's working.
     await update.message.reply_chat_action(action="typing")
     gas_info = get_average_gas_price()
-    await update.message.reply_text(gas_info, parse_mode='HTML') # 'HTML' allows for <b>bold</b> text.
+    await update.message.reply_text(gas_info, parse_mode='HTML')
+
+def run_flask_app():
+    """Runs the Flask web server on the port specified by Render."""
+    port = int(os.environ.get("PORT", 10000)) # Render sets $PORT, default to 10000 for local dev
+    # Run on 0.0.0.0 to make it accessible externally
+    web_app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 def main():
-    """Runs the bot."""
+    """Runs the bot and the web server."""
+    print("Starting the bot and health check server...")
+    
+    # --- Start the Flask server in a separate thread ---
+    # This allows it to run alongside the bot without blocking.
+    flask_thread = threading.Thread(target=run_flask_app)
+    flask_thread.daemon = True  # This makes the thread exit when the main program does.
+    flask_thread.start()
+    
+    # --- Start the Telegram Bot ---
     # Create the Application
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
@@ -81,8 +105,8 @@ def main():
     application.add_handler(CommandHandler("gas", gas_command))
     
     # Start the bot
-    print("Bot is running...")
-    application.run_polling() # This keeps the bot running and listening for commands.
+    print("Bot is now polling...")
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
